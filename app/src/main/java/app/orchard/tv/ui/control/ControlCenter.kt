@@ -75,6 +75,7 @@ import app.orchard.tv.HomeViewModel
 import app.orchard.tv.Overlay
 import app.orchard.tv.R
 import app.orchard.tv.apps.SourceLooks
+import app.orchard.tv.guard.HomeGuardService
 import app.orchard.tv.settings.AerialSettings
 import app.orchard.tv.system.HomeStatus
 import app.orchard.tv.system.LaunchFallback
@@ -524,6 +525,7 @@ private fun BrightnessRow(vm: HomeViewModel) {
 
 @Composable
 private fun InputsPage(vm: HomeViewModel, takeFocus: Boolean, onOpen: (android.content.Intent) -> Unit) {
+    val context = LocalContext.current
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) {
         if (!takeFocus) return@LaunchedEffect
@@ -551,7 +553,15 @@ private fun InputsPage(vm: HomeViewModel, takeFocus: Boolean, onOpen: (android.c
                 trailing = SourceLooks.of(source.id)?.let { it.name ?: it.device?.let { d -> stringResource(d.label) } }
                     ?: source.deviceName ?: if (source.connected) connected else null,
                 focusRequester = if (i == 0) first else null,
-                onClick = { onOpen(source.intent) },
+                onClick = {
+                    if (source.id == SystemProbe.SKYWORTH_STOCK_SOURCE_ID) {
+                        // The entry opens the firmware launcher, whose cards carry the source list.
+                        // The guard must leave the launcher in front: go through its allowance.
+                        HomeGuardService.openStockLauncher(source.intent.component?.packageName ?: "") {
+                            runCatching { context.startActivity(source.intent) }.isSuccess
+                        }
+                    } else onOpen(source.intent)
+                },
             )
         }
         // Switching is this page's one job; what Aerial does with the inputs is a page further in.

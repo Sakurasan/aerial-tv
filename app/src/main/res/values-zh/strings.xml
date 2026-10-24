@@ -158,6 +158,7 @@
     <string name="st_focus_high_hint">选中的 App 外面加一圈白色描边，离得远也看得清。</string>
     <string name="st_focus_standard_hint">与 Apple TV 默认一致：选中的 App 只放大浮起。</string>
     <string name="cc_inputs_settings">信号源设置</string>
+    <string name="cc_inputs_system">信号源（系统桌面）</string>
     <string name="cc_inputs_pin">显示在主屏幕（可多选）</string>
     <string name="cc_inputs_boot">开机时打开（选一个）</string>
     <string name="cc_inputs_boot_none">不打开，停在 Aerial</string>

@@ -353,7 +353,33 @@ object SystemProbe {
     fun sources(context: Context): List<TvSource> = frameworkSources(context)
         .ifEmpty { KonkaSources.load(context) }
         .ifEmpty { tclSources(context) }
-        .ifEmpty { whaleySources(context) } + listOfNotNull(usbSource(context))
+        .ifEmpty { whaleySources(context) }
+        .ifEmpty { skyworthStockHomeSource(context) } + listOfNotNull(usbSource(context))
+
+    const val SKYWORTH_STOCK_SOURCE_ID = "skyworth_stock_home"
+
+    /**
+     * Skyworth skyT963 (Android 9): HDMI is handled by the firmware outside the TV input framework
+     * (tv_input lists nothing), and the SDK's source list answers only to system callers. Offer the
+     * firmware launcher, whose cards carry the signal-source list; it is opened through the guard's
+     * stock-home allowance (see ControlCenter), and the viewer picks HDMI there as on the stock
+     * desktop.
+     */
+    private fun skyworthStockHomeSource(context: Context): List<TvSource> {
+        val pm = context.packageManager
+        val intent = listOf("com.skyworth.officehomepage", "com.tianci.movieplatform")
+            .firstNotNullOfOrNull { runCatching { pm.getLaunchIntentForPackage(it) }.getOrNull() }
+            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            ?: return emptyList()
+        return listOf(TvSource(
+            id = SKYWORTH_STOCK_SOURCE_ID,
+            label = context.getString(R.string.cc_inputs_system),
+            kind = SourceKind.Other,
+            connected = false,
+            deviceName = null,
+            intent = intent,
+        ))
+    }
 
     /**
      * The TV's own player for USB drives, offered as one more input: owners switch the TV on to
