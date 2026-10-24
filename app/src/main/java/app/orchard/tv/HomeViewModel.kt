@@ -159,15 +159,18 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
      * The firmware's source manager can initialize long after boot: Aerial probes the sources once
      * while starting and caches what is then an empty list (Skyworth skyT963, Android 9: HDMI1 and
      * HDMI2 fill in ~30 s after boot, after Aerial has already loaded). Re-probe when the inputs
-     * page opens and the list is still empty.
+     * page opens. The list also shrinks while it runs: skyT963 drops the HDMI rows once a source
+     * is playing and re-adds them later — keep everything ever seen, HDMI ports are physical.
      */
     fun reprobeSources() {
-        if (!loaded || sources.isNotEmpty()) return
+        if (!loaded) return
         val ctx = context
         viewModelScope.launch {
             val found = withContext(Dispatchers.Default) { SystemProbe.sources(ctx) }
-            if (found.isNotEmpty()) {
-                sources = found
+            val merged = (found + sources).distinctBy { it.id }
+                .sortedWith(compareBy({ it.kind.ordinal }, { it.label }))
+            if (merged != sources) {
+                sources = merged
                 arrange()
             }
         }
