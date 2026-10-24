@@ -219,6 +219,17 @@ class HomeGuardService : AccessibilityService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             registerReceiver(userUnlocked, IntentFilter(Intent.ACTION_USER_UNLOCKED))
         }
+        // Fast boot take-over: with an unknown front the take-over does not need stockHomes, so
+        // start its timer before the init below — which took ~3 s on Skyworth skyT963 (Android 9),
+        // and the stock launcher showed for all of it. The later boot/revival block is skipped
+        // when this ran; it only repeats the same take-over with a different log line.
+        val fastBootTakeOver = GuardSetup.isUserUnlocked(this) &&
+            SystemClock.elapsedRealtime() < BOOT_WINDOW_MS &&
+            getSystemService<PowerManager>()?.isInteractive == true
+        if (fastBootTakeOver) {
+            takeOverOnceSettled("bound shortly after boot", woke = true)
+            scheduleBootRechecks()
+        }
         refreshStockHomes()
         screenOff = getSystemService<PowerManager>()?.isInteractive == false
         updateKeyFilter()
@@ -250,7 +261,8 @@ class HomeGuardService : AccessibilityService() {
         // Not gated on being the default Home: Skyworth/Coolita (8R145, Android 11) starts its own
         // launcher at boot whatever Home resolves to (issue #43). The take-over looks first, and
         // bringing Aerial back over itself changes nothing.
-        if ((SystemClock.elapsedRealtime() < BOOT_WINDOW_MS || revived || diedInFront) &&
+        if (!fastBootTakeOver &&
+            (SystemClock.elapsedRealtime() < BOOT_WINDOW_MS || revived || diedInFront) &&
             getSystemService<PowerManager>()?.isInteractive == true
         ) {
             takeOverOnceSettled(
@@ -274,11 +286,11 @@ class HomeGuardService : AccessibilityService() {
      * viewer straight back out of the input (reported by a user, reproduced on Xiaomi MiTV-MFTR0:
      * the input's ExternalSourceActivity started 130 ms before the guard was bound).
      */
-    private fun takeOverOnceSettled(reason: String, woke: Boolean) {
+    private fun takeOverOnceSettled(reason: String, woke: Boolean, settleMs: Long = SETTLE_MS) {
         takeOverReason = reason
         takeOverOnWake = woke
         handler.removeCallbacks(takeOver)
-        handler.postDelayed(takeOver, SETTLE_MS)
+        handler.postDelayed(takeOver, settleMs)
     }
 
     private fun hasBootSource(): Boolean = runCatching {
@@ -391,12 +403,19 @@ class HomeGuardService : AccessibilityService() {
      * either: VIDAA starts its launcher by component, or Aerial through persist.vt.use_home_pkg.
      */
     private val keysPassThrough by lazy {
-        VIDAA_PACKAGES.any { runCatching { packageManager.getPackageInfo(it, 0) }.isSuccess }
+        // Skyworth skyT963 (Android 9): with the filter on, one remote volume press ran the
+        // volume to 100 or 0 even with volume keys passed through untouched — the firmware
+        // double-applies volume around the filter, as on VIDAA (issue #7). Drop the filter
+        // entirely; the stock home is taken over through window events instead.
+        true || VIDAA_PACKAGES.any { runCatching { packageManager.getPackageInfo(it, 0) }.isSuccess }
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (!GuardSetup.isUserUnlocked(this)) return false
-        if (event.keyCode in VOLUME_KEYS) return if (filteringForCecOnly) false else takeVolumeKey(event)
+        // Skyworth skyT963 (Android 9) applies the volume before the filter sees the key, so
+        // takeVolumeKey misreads it as "changed elsewhere", consumes the key and steps again:
+        // one press ran the volume to 100 or 0. Volume keys always pass through untouched.
+        if (event.keyCode in VOLUME_KEYS) return false
         // Any key that is done: whatever it did to the volume (Control Center's slider) is in.
         if (event.action == KeyEvent.ACTION_UP) volumeSeen = volumeNow()
         if (event.keyCode != KeyEvent.KEYCODE_HOME) return false
@@ -577,7 +596,7 @@ class HomeGuardService : AccessibilityService() {
             // once it has settled; the input will be in front by then.
             if (before in SOURCE_SWITCHERS || pkg in SOURCE_SWITCHERS) {
                 Log.i(TAG, "stock home $pkg came to the front during an input switch; looking again shortly")
-                takeOverOnceSettled("after an input switch", woke = false)
+                takeOverOnceSettled("after an input switch", woke = false, settleMs = INPUT_SWITCH_SETTLE_MS)
                 return
             }
             // One Home press shows two window changes 0.2 s apart (MiTV-MFTR0); one start will do.
@@ -682,7 +701,11 @@ class HomeGuardService : AccessibilityService() {
     companion object {
         private const val TAG = "AerialGuard"
         private const val BOOT_WINDOW_MS = 3 * 60 * 1000L
-        private const val SETTLE_MS = 1500L
+        // 300 ms: the boot take-over showed the stock launcher for ~2 s on Skyworth skyT963
+        // (Android 9) — the settle delay was most of it. The input-switch path below keeps the
+        // original 1.5 s: there the launcher legitimately shows while the input loads.
+        private const val SETTLE_MS = 300L
+        private const val INPUT_SWITCH_SETTLE_MS = 1500L
         private const val WAKE_WINDOW_MS = 15_000L
         private val BOOT_RECHECKS_MS = listOf(30_000L, 45_000L)
         private const val DEAF_AFTER_MS = 20_000L
