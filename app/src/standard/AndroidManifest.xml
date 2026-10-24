@@ -6,6 +6,11 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.HOME" />
                 <category android:name="android.intent.category.DEFAULT" />
+                <!-- Coocaa firmwares start their launcher through private home categories
+                     (HOME.CC on Android 6/8, LITE_HOME on Android 9/11); listing them lets the
+                     firmware treat Aerial as a home candidate too (issue #397). -->
+                <category android:name="android.intent.category.HOME.CC" />
+                <category android:name="smartdevice.intent.category.LITE_HOME" />
             </intent-filter>
         </activity>
     </application>
