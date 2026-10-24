@@ -525,6 +525,9 @@ private fun BrightnessRow(vm: HomeViewModel) {
 @Composable
 private fun InputsPage(vm: HomeViewModel, takeFocus: Boolean, onOpen: (android.content.Intent) -> Unit) {
     val first = remember { FocusRequester() }
+    // The firmware's source manager can initialize long after boot; what the startup probe saw
+    // was then an empty list. Ask again now that the user is looking at the page.
+    LaunchedEffect(Unit) { if (vm.sources.isEmpty()) vm.reprobeSources() }
     LaunchedEffect(Unit) {
         if (!takeFocus) return@LaunchedEffect
         withFrameNanos { }

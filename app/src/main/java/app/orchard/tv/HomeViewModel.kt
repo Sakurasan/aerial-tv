@@ -155,6 +155,24 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * The firmware's source manager can initialize long after boot: Aerial probes the sources once
+     * while starting and caches what is then an empty list (Skyworth skyT963, Android 9: HDMI1 and
+     * HDMI2 fill in ~30 s after boot, after Aerial has already loaded). Re-probe when the inputs
+     * page opens and the list is still empty.
+     */
+    fun reprobeSources() {
+        if (!loaded || sources.isNotEmpty()) return
+        val ctx = context
+        viewModelScope.launch {
+            val found = withContext(Dispatchers.Default) { SystemProbe.sources(ctx) }
+            if (found.isNotEmpty()) {
+                sources = found
+                arrange()
+            }
+        }
+    }
+
     private fun arrange() {
         // Pinned TV inputs share the grid, order and hiding with the apps.
         val pinned = sources.filter { it.id in AerialSettings.pinnedSources }.map { sourceEntry(context, it) }
