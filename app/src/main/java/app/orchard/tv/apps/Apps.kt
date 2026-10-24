@@ -172,6 +172,9 @@ object AppCatalog {
             if (found.putIfAbsent(info.packageName, info to false) == null) stockHomes += info.packageName
         }
         found.remove(context.packageName)
+        // A blank system stub that is only the default home so the guard can keep its key
+        // filter logic; it draws nothing worth opening.
+        found.remove("com.example.android.home")
 
         val byCategory = HashMap<String, SystemTile>()
         for ((category, tile) in SYSTEM_CATEGORIES) {
@@ -218,6 +221,9 @@ object AppCatalog {
 
     private const val KIDS_KEY = "shortcut:kids"
 
+    /** Stock homes worth a 原桌面 tile on Skyworth skyT963, most-used first; see stockLaunchers(). */
+    private val PREFERRED_STOCK_HOMES = listOf("com.skyworth.officehomepage", "com.tianci.movieplatform")
+
     /**
      * The TV's own launcher, which some firmwares declare only as a Home: TCL's com.tcl.cyberui
      * (雷鸟, MT5879) has no launcher entry at all, and the maker's content (欢网 membership) is
@@ -229,12 +235,19 @@ object AppCatalog {
     private fun stockLaunchers(pm: PackageManager): List<ActivityInfo> {
         val guarded = HomeGuardService.stockHomes()
         if (guarded != null) {
-            return guarded.mapNotNull { (pkg, classes) ->
+            val homes = guarded.mapNotNull { (pkg, classes) ->
                 classes.firstNotNullOfOrNull { cls ->
                     runCatching { pm.getActivityInfo(ComponentName(pkg, cls), 0) }.getOrNull()
                         ?.takeIf { it.exported && it.isEnabled && it.applicationInfo.enabled }
                 }
             }
+            // Skyworth skyT963 (Android 9) ships three home packages — the 芒果 movieplatform, the
+            // officehomepage the Home key opens, and a blank com.example.android.home stub — and
+            // the list showed three identical 原桌面 tiles. Keep the one the Home key opens; the
+            // stub is dropped from the list entirely in load().
+            val preferred = homes.firstOrNull { it.packageName in PREFERRED_STOCK_HOMES }
+                ?: homes.firstOrNull()
+            return preferred?.let { listOf(it) } ?: emptyList()
         }
         return pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)
             .filter { it.priority >= 0 && it.activityInfo.exported }
