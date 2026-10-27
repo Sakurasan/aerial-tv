@@ -1273,6 +1273,13 @@ class HomeGuardService : AccessibilityService() {
         private val coverHandler = Handler(Looper.getMainLooper())
         private val coverTimeout = Runnable { removeCover("timeout") }
 
+        /** A blurred snapshot of Aerial's home, shown instead of dead black; see MainActivity.onPause. */
+        @Volatile private var backdrop: android.graphics.Bitmap? = null
+
+        fun setCoverBackdrop(bitmap: android.graphics.Bitmap?) {
+            backdrop = bitmap
+        }
+
         /**
          * A black cover over the stock launcher. The launcher is a plain application window
          * (skyT963: mBaseLayer=21000), so an application overlay sits above it — what failed
@@ -1287,7 +1294,15 @@ class HomeGuardService : AccessibilityService() {
                 return
             }
             val wm = context.getSystemService<WindowManager>() ?: return
-            val view = View(context).apply { setBackgroundColor(Color.BLACK) }
+            val shot = backdrop
+            val view = if (shot != null && !shot.isRecycled) {
+                android.widget.ImageView(context).apply {
+                    scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                    setImageBitmap(shot)
+                }
+            } else {
+                View(context).apply { setBackgroundColor(Color.BLACK) }
+            }
             val lp = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,

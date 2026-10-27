@@ -812,9 +812,29 @@ class MainActivity : ComponentActivity() {
             idleHandler.removeCallbacks(endHomeBounce)
             idleHandler.postDelayed(endHomeBounce, HOME_BOUNCE_MS)
         }
+        captureCoverBackdrop()
         idleHandler.removeCallbacks(showScreensaver)
         idleHandler.removeCallbacks(dreamCheck)
         hideScreensaver()
+    }
+
+    /**
+     * A small, blurred snapshot of Home for the guard's cover (Android 9 has no cross-window
+     * blur, so the snapshot is blurred here: scaled down and back up with filtering — a cheap
+     * gaussian that reads as frosted glass on a TV). Taken on the way to the background, where
+     * the next thing the viewer sees is the cover.
+     */
+    private fun captureCoverBackdrop() {
+        runCatching {
+            val decor = window.decorView
+            if (decor.width == 0 || decor.height == 0) return
+            val full = android.graphics.Bitmap.createBitmap(decor.width / 4, decor.height / 4, android.graphics.Bitmap.Config.ARGB_8888)
+            decor.draw(android.graphics.Canvas(full))
+            val smallW = 48
+            val small = android.graphics.Bitmap.createScaledBitmap(full, smallW, smallW * full.height / full.width, true)
+            if (small != full) full.recycle()
+            HomeGuardService.setCoverBackdrop(small)
+        }.onFailure { DiagLog.i("cover backdrop: ${it.message}") }
     }
 
     override fun onStop() {
