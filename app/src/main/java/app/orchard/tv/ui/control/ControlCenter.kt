@@ -566,6 +566,16 @@ private fun BrightnessRow(vm: HomeViewModel) {
 @Composable
 private fun InputsPage(vm: HomeViewModel, takeFocus: Boolean, onOpen: (android.content.Intent) -> Unit) {
     val first = remember { FocusRequester() }
+    // The firmware's source manager initializes late, and its list shrinks while a source plays
+    // (skyT963 drops the HDMI rows until the next boot). Re-probe while the page is open — the
+    // probe is one provider query, and reprobeSources merges what comes back with what has been
+    // seen, so the list only grows and is complete within a few seconds of the page being up.
+    LaunchedEffect(Unit) {
+        while (true) {
+            vm.reprobeSources()
+            delay(3000)
+        }
+    }
     LaunchedEffect(Unit) {
         if (!takeFocus) return@LaunchedEffect
         withFrameNanos { }

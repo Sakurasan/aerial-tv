@@ -73,6 +73,9 @@ private const val LEADING_TILES = 13
 /** Time since boot at which the app list is looked at again; see HomeViewModel.catchUpAfterBoot. */
 private val BOOT_CATCH_UP_MS = listOf(60_000L, 180_000L)
 
+/** Time since boot at which the source list is probed again; see HomeViewModel.catchUpSourcesAfterBoot. */
+private val SOURCE_CATCH_UP_MS = listOf(30_000L, 60_000L, 120_000L, 300_000L)
+
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private val context get() = getApplication<Application>()
     private val store = LayoutStore(app)
@@ -234,6 +237,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             if (!wasLoaded) {
                 DiagLog.i("Home loaded: ${apps.size} tiles, ${sources.size} inputs, ${SystemClock.uptimeMillis() - started} ms")
                 catchUpAfterBoot()
+                catchUpSourcesAfterBoot()
             }
             loaded = true
             // Counted from this load's own list: a second Home (the guard starting MainActivity
@@ -288,6 +292,22 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * See catchUpAfterBoot: Skyworth's source manager fills its provider later than Aerial loads
+     * (HDMI1/HDMI2 landed ~30 s into a boot on skyT963). Re-probe on a schedule so the list is
+     * complete by the time the viewer opens the inputs page, without anyone opening it first.
+     */
+    private fun catchUpSourcesAfterBoot() {
+        viewModelScope.launch {
+            for (at in SOURCE_CATCH_UP_MS) {
+                val wait = at - SystemClock.elapsedRealtime()
+                if (wait <= 0) continue
+                delay(wait)
+                reprobeSources()
+            }
+        }
+    }
+
+    /**
      * Taking over early in a boot, Aerial can list the apps before the system has registered them
      * all, and apps that were already installed send no broadcast later: the missing ones stayed
      * missing until Aerial restarted (Konka LED60R1, issue #394; old Konka on Android 5.1, #170).
@@ -304,6 +324,26 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 if (again.map { it.key }.toSet() == all.map { it.key }.toSet()) continue
                 DiagLog.i("${again.size - all.size} more apps a while into the boot")
                 all = again
+            }
+        }
+    }
+
+    /**
+     * The firmware's source manager can initialize long after boot: Aerial probes the sources once
+     * while starting and caches what is then an empty list (Skyworth skyT963, Android 9: HDMI1 and
+     * HDMI2 fill in ~30 s after boot, after Aerial has already loaded). Re-probe when the inputs
+     * page opens. The list also shrinks while it runs: skyT963 drops the HDMI rows once a source
+     * is playing and re-adds them later — keep everything ever seen, HDMI ports are physical.
+     */
+    fun reprobeSources() {
+        if (!loaded) return
+        val ctx = context
+        viewModelScope.launch {
+            val found = withContext(Dispatchers.Default) { SystemProbe.sources(ctx) }
+            val merged = (found + sources).distinctBy { it.id }
+                .sortedWith(compareBy({ it.kind.ordinal }, { it.label }))
+            if (merged != sources) {
+                sources = merged
                 arrange()
             }
         }

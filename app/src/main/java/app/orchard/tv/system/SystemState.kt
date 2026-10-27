@@ -810,7 +810,7 @@ object SystemProbe {
             ?: return emptyList()
         if (!activity.exported || !activity.enabled || !activity.applicationInfo.enabled) return emptyList()
         return runCatching {
-            val sources = mutableListOf<TvSource>()
+            val rows = mutableListOf<SkyRow>()
             context.contentResolver.query(
                 SKYWORTH_SOURCES,
                 arrayOf("sourceName", "sourceIndex", "displayName", "signalState"),
@@ -823,31 +823,67 @@ object SystemProbe {
                 val display = cursor.getColumnIndexOrThrow("displayName")
                 val signal = cursor.getColumnIndexOrThrow("signalState")
                 while (cursor.moveToNext()) {
-                    val sourceName = cursor.getString(name)?.takeIf { it.isNotBlank() }
-                    if (sourceName != null) {
-                        val sourceIndex = cursor.getInt(index)
-                        val label = cursor.getString(display)?.takeIf { it.isNotBlank() } ?: sourceName
-                        sources += TvSource(
-                            id = "skyworth:$sourceName:$sourceIndex",
-                            label = label,
-                            kind = skyworthKind(sourceName),
-                            // signalState is 1 for every listed port, connected or not.
-                            connected = false,
-                            deviceName = null,
-                            intent = Intent().setComponent(player)
-                                .putExtra("source", Bundle().apply {
-                                    putString("name", sourceName)
-                                    putString("displayname", label)
-                                    putInt("index", sourceIndex)
-                                    putInt("signal", cursor.getInt(signal))
-                                })
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                        )
-                    }
+                    val sourceName = cursor.getString(name)?.takeIf { it.isNotBlank() } ?: continue
+                    rows += SkyRow(sourceName, cursor.getInt(index), cursor.getString(display), cursor.getInt(signal))
                 }
+            }
+            // skyT963: the list holds every port ~30 s into a boot, then shrinks to whatever is
+            // playing; and right after boot it can still be partial when Aerial loads. Keep every
+            // row ever seen — persisted, so the next boot starts from the full set — and offer the
+            // union. Ports are physical; they do not actually go away.
+            val merged = (rows + loadSeenSources(context))
+                .distinctBy { it.name to it.index }
+                .sortedBy { it.index }
+            if (merged.isNotEmpty()) saveSeenSources(context, merged)
+            val sources = mutableListOf<TvSource>()
+            for (row in merged) {
+                val label = row.display?.takeIf { it.isNotBlank() } ?: row.name
+                sources += TvSource(
+                    id = "skyworth:${row.name}:${row.index}",
+                    label = label,
+                    kind = skyworthKind(row.name),
+                    // signalState is 1 for every listed port, connected or not.
+                    connected = false,
+                    deviceName = null,
+                    intent = Intent().setComponent(player)
+                        .putExtra("source", Bundle().apply {
+                            putString("name", row.name)
+                            putString("displayname", label)
+                            putInt("index", row.index)
+                            putInt("signal", row.signal)
+                        })
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
             }
             sources.distinctBy { it.id }.sortedWith(compareBy({ it.kind.ordinal }, { it.label }))
         }.getOrDefault(emptyList())
+    }
+
+    /** One row of the Skyworth source_list provider. */
+    private data class SkyRow(val name: String, val index: Int, val display: String?, val signal: Int)
+
+    private fun seenSourcesFile(context: Context) = java.io.File(context.filesDir, "skyworth_sources.json")
+
+    private fun loadSeenSources(context: Context): List<SkyRow> = runCatching {
+        val file = seenSourcesFile(context)
+        if (!file.exists()) return emptyList()
+        val array = org.json.JSONArray(file.readText())
+        (0 until array.length()).map { i ->
+            val row = array.getJSONObject(i)
+            SkyRow(row.getString("name"), row.getInt("index"), row.optString("display"), row.getInt("signal"))
+        }
+    }.getOrDefault(emptyList())
+
+    private fun saveSeenSources(context: Context, rows: List<SkyRow>) = runCatching {
+        val array = org.json.JSONArray()
+        rows.forEach { row ->
+            array.put(org.json.JSONObject()
+                .put("name", row.name)
+                .put("index", row.index)
+                .put("display", row.display ?: "")
+                .put("signal", row.signal))
+        }
+        seenSourcesFile(context).writeText(array.toString())
     }
 
     /** VOD is Skyworth's name for the tuner source its TV activity opens as 电视. */
