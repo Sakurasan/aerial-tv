@@ -8,6 +8,7 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.BroadcastReceiver
 import android.content.ComponentName
+import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -16,21 +17,27 @@ import android.database.ContentObserver
 import android.media.AudioManager
 import android.media.tv.TvInputManager
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.os.Process
 import android.os.SystemClock
+import android.graphics.Color
+import android.graphics.PixelFormat
 import android.provider.Settings
 import android.util.Log
 import android.hardware.input.InputManager
 import android.view.InputDevice
 import android.view.KeyEvent
+import android.view.View
+import android.view.WindowManager
 import android.view.ViewConfiguration
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import androidx.core.content.ContextCompat
 import androidx.core.content.getSystemService
+import app.orchard.tv.BuildConfig
 import app.orchard.tv.MainActivity
 import app.orchard.tv.dream.AerialDream
 import app.orchard.tv.settings.AerialSettings
@@ -335,15 +342,36 @@ class HomeGuardService : AccessibilityService() {
             updateKeyFilter()
             if (screenOff) {
                 BootOpen.noteScreenOff(this@HomeGuardService)
+                frontAtSleep = lastWindow?.first
+                // The lasting cover goes up NOW, while the screen is dark: on wake the firmware
+                // starts its launcher before any broadcast or window event reaches this process
+                // (skyT963: ~1.8 s of launcher before the SCREEN_ON receiver ran). A cover that is
+                // already up when the screen lights is what the viewer cannot see past. Only when
+                // the sleep was home usage — waking to an input must show the input.
+                if (frontAtSleep == packageName || frontAtSleep in stockHomes) {
+                    coverStockLauncher(this@HomeGuardService, ms = STANDBY_COVER_MS)
+                }
                 if (GuardSetup.offInStandby(this@HomeGuardService)) GuardSetup.stepOutForStandby(this@HomeGuardService)
                 return
             }
-            // Firmwares put their own launcher back in front while the TV is in standby, and no
-            // window change follows on wake. Look once things have settled after the screen lights.
             screenOnAt = SystemClock.elapsedRealtime()
+            // Every second counts on wake: when the sleep was home usage, start Aerial at once
+            // instead of after the settle — the settle is for telling a CEC input from Home, and a
+            // TV that fell asleep on Home wakes to Home. The cover stays until Aerial's first
+            // frame, so the launcher under it never shows.
+            if (frontAtSleep == packageName || frontAtSleep in stockHomes) {
+                goHome(woke = true)
+            } else {
+                // Slept on an input (no cover was added): nothing to remove, but a stale cover
+                // from an earlier bounce must not sit over a newly chosen input.
+                removeCover("wake to a non-home front")
+            }
             takeOverOnceSettled("screen on", woke = true)
         }
     }
+
+    /** The front when the screen went off; see the wake fast-start in the screen-on receiver. */
+    private var frontAtSleep: String? = null
 
     /**
      * In standby the guard filters no keys, so the power key that wakes the TV goes to the system
@@ -468,9 +496,7 @@ class HomeGuardService : AccessibilityService() {
      */
     override fun onCreate() {
         super.onCreate()
-        if (SystemClock.elapsedRealtime() >= BOOT_WINDOW_MS || !GuardSetup.isUserUnlocked(this)) return
-        if (!hasBootSource()) return
-        if (getSystemService<PowerManager>()?.isInteractive != true) return
+        if (!GuardSetup.isUserUnlocked(this) || !hasBootSource()) return
         Log.i(TAG, "started shortly after boot; taking over before the service is connected")
         takeOverOnceSettled("started shortly after boot", woke = true)
     }
@@ -628,6 +654,18 @@ class HomeGuardService : AccessibilityService() {
             )
             if (SystemClock.elapsedRealtime() < BOOT_WINDOW_MS) scheduleBootRechecks()
         }
+        // The system binds this service when it pleases — on skyT963 anywhere from ~30 s to ~53 s
+        // into a boot, and the firmware's launcher starts at ~28 s: bound late, it flashes. The
+        // revival sync adapter is always syncable; a periodic sync persists across reboots and the
+        // sync manager starts it (and this process with it) well before the launcher.
+        runCatching {
+            val account = android.accounts.Account("Aerial", packageName)
+            val periodic = ContentResolver.getPeriodicSyncs(account, "settings")
+                .none { it.period == SYNC_KEEPALIVE_SECONDS }
+            if (periodic) ContentResolver.addPeriodicSync(
+                account, "settings", Bundle.EMPTY, SYNC_KEEPALIVE_SECONDS,
+            )
+        }.onFailure { Log.w(TAG, "could not schedule the source keepalive sync", it) }
     }
 
     /**
@@ -637,11 +675,11 @@ class HomeGuardService : AccessibilityService() {
      * viewer straight back out of the input (reported by a user, reproduced on Xiaomi MiTV-MFTR0:
      * the input's ExternalSourceActivity started 130 ms before the guard was bound).
      */
-    private fun takeOverOnceSettled(reason: String, woke: Boolean) {
+    private fun takeOverOnceSettled(reason: String, woke: Boolean, settleMs: Long = SETTLE_MS) {
         takeOverReason = reason
         takeOverOnWake = woke
         handler.removeCallbacks(takeOver)
-        handler.postDelayed(takeOver, SETTLE_MS)
+        handler.postDelayed(takeOver, settleMs)
     }
 
     private fun hasBootSource(): Boolean = runCatching {
@@ -1134,6 +1172,9 @@ class HomeGuardService : AccessibilityService() {
         val before = lastWindow?.first
         if (isActivity(pkg, cls)) {
             lastWindow = pkg to cls
+            // Aerial drawing (its window event can precede the first frame; onAerialFirstFrame is
+            // the precise signal) — either way the cover has done its job.
+            if (pkg == packageName) removeCover("Aerial front")
             if (!CecHome.active(this, pkg)) {
                 lastCecHomeUp = Long.MIN_VALUE / 2
                 handler.removeCallbacks(cecHomeHold)
@@ -1163,7 +1204,7 @@ class HomeGuardService : AccessibilityService() {
             // once it has settled; the input will be in front by then.
             if (before in SOURCE_SWITCHERS || pkg in SOURCE_SWITCHERS) {
                 Log.i(TAG, "stock home $pkg came to the front during an input switch; looking again shortly")
-                takeOverOnceSettled("after an input switch", woke = false)
+                takeOverOnceSettled("after an input switch", woke = false, settleMs = INPUT_SWITCH_SETTLE_MS)
                 return
             }
             // One Home press shows two window changes 0.2 s apart (MiTV-MFTR0); one start will do.
@@ -1184,6 +1225,8 @@ class HomeGuardService : AccessibilityService() {
         updateKeyFilter()
         // Leaving the stock launcher for a real app ends the visit: Home goes to Aerial again.
         if (allowed && pkg != packageName && isApp(pkg)) allowStockUntil = 0L
+        // A real app the viewer chose must show: the cover only ever hides the launcher.
+        if (pkg != packageName && pkg !in stockHomes && isApp(pkg)) removeCover("app $pkg in front")
     }
 
     private val activityCache = HashMap<Pair<String, String>, Boolean>()
@@ -1196,13 +1239,9 @@ class HomeGuardService : AccessibilityService() {
     private fun isApp(pkg: String): Boolean =
         packageManager.getLeanbackLaunchIntentForPackage(pkg) != null || packageManager.getLaunchIntentForPackage(pkg) != null
 
-    private fun isDefaultHome(): Boolean = resolvedHome() == packageName
+    private fun isDefaultHome(): Boolean = isDefaultHome(this)
 
-    private fun resolvedHome(): String? =
-        packageManager.resolveActivity(
-            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
-            PackageManager.MATCH_DEFAULT_ONLY,
-        )?.activityInfo?.packageName
+    private fun resolvedHome(): String? = resolvedHome(this)
 
     /**
      * The stock launcher list is read again when a package is enabled, disabled, installed or
@@ -1365,6 +1404,10 @@ class HomeGuardService : AccessibilityService() {
             return
         }
         broughtBackAt = SystemClock.uptimeMillis()
+        // The launcher is a plain application window (skyT963: mBaseLayer=21000): an app overlay
+        // covers it. A cover added when the launcher is already on screen only hides what comes
+        // after, so the lasting one goes up at SCREEN_OFF; this one re-arms it on every bounce.
+        coverStockLauncher(this)
         runCatching {
             val intent = MainActivity.bringBackIntent(this).putExtra(MainActivity.EXTRA_WOKE, woke)
                 .putExtra(MainActivity.EXTRA_REOPEN_BOOT, reopenBoot)
@@ -1403,8 +1446,16 @@ class HomeGuardService : AccessibilityService() {
         private const val BOOT_TARGET_COVER_MS = 60_000L
         /** A Home press this recently is the viewer leaving what the TV starts on; see bootTargetCovered. */
         private const val HOME_LEFT_MS = 5_000L
-        private const val SETTLE_MS = 1500L
+        private const val SETTLE_MS = 300L
         private const val BOOT_STOCK_CAP_MS = 20_000L
+        /** A bounce's worth of cover, re-armed by every goHome. */
+        private const val COVER_MS = 8_000L
+        /** From SCREEN_OFF until Aerial is back: standby is when the firmware pre-draws its launcher. */
+        private const val STANDBY_COVER_MS = 4 * 60 * 60 * 1000L
+        /** The keepalive sync period: the sync manager starts this process early at boot. */
+        private const val SYNC_KEEPALIVE_SECONDS = 900L
+        /** Input switches legitimately pass through the launcher on some Skyworths (#108, #155). */
+        private const val INPUT_SWITCH_SETTLE_MS = 1500L
         private const val WAKE_WINDOW_MS = 15_000L
         private val BOOT_RECHECKS_MS = listOf(30_000L, 45_000L)
         private const val DEAF_AFTER_MS = 20_000L
@@ -1454,6 +1505,7 @@ class HomeGuardService : AccessibilityService() {
         @Volatile
         private var deafAfterHome = false
 
+<<<<<<< HEAD
         /**
          * Apps where Home brought no window change of the stock launcher, kept across processes.
          * In the Bilibili client blbl.cat3399 on Xiaomi MiTV-MFTR0 (Android 14, OS3.0.106), the
@@ -1480,6 +1532,64 @@ class HomeGuardService : AccessibilityService() {
             context.getSharedPreferences(QUIET_HOME_PREFS, Context.MODE_PRIVATE).edit().putStringSet("apps", next).apply()
         }
 
+=======
+        private var cover: View? = null
+        private val coverHandler = Handler(Looper.getMainLooper())
+        private val coverTimeout = Runnable { removeCover("timeout") }
+
+        /**
+         * A black cover over the stock launcher. The launcher is a plain application window
+         * (skyT963: mBaseLayer=21000), so an application overlay sits above it — what failed
+         * before was the timing, not the layer: a cover added on wake landed ~2 s after the
+         * launcher had already drawn. The lasting cover therefore goes up at SCREEN_OFF and
+         * spans the whole standby; this re-arms it on every bounce.
+         */
+        fun coverStockLauncher(context: Context, ms: Long = COVER_MS) {
+            coverHandler.removeCallbacks(coverTimeout)
+            if (cover != null) {
+                coverHandler.postDelayed(coverTimeout, ms)
+                return
+            }
+            val wm = context.getSystemService<WindowManager>() ?: return
+            val view = View(context).apply { setBackgroundColor(Color.BLACK) }
+            val lp = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                    or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.OPAQUE,
+            )
+            cover = runCatching { wm.addView(view, lp); view }.getOrElse {
+                DiagLog.i("guard: no cover over the stock launcher: ${it.message}")
+                return
+            }
+            DiagLog.i("guard: covering the stock launcher")
+            coverHandler.postDelayed(coverTimeout, ms)
+        }
+
+        fun removeCover(reason: String) {
+            val view = cover ?: return
+            cover = null
+            coverHandler.removeCallbacks(coverTimeout)
+            DiagLog.i("cover down ($reason)")
+            runCatching { view.context.getSystemService<WindowManager>()?.removeView(view) }
+                .onFailure { Log.w(TAG, "could not remove the cover", it) }
+        }
+
+        fun isDefaultHome(context: Context): Boolean = resolvedHome(context) == context.packageName
+
+        /** For AerialApp: re-cover a dark screen after the firmware killed the process mid-standby. */
+        fun standbyCoverMs(): Long = STANDBY_COVER_MS
+
+        fun onAerialFirstFrame() = removeCover("Aerial first frame")
+
+        private fun resolvedHome(context: Context): String? =
+            context.packageManager.resolveActivity(
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+                PackageManager.MATCH_DEFAULT_ONLY,
+            )?.activityInfo?.packageName
+
+>>>>>>> e58cb77 (custom on v1.62: Skyworth sources persistence, SCREEN_OFF cover, wake fast-start, tile dedup — one squashed apply of the 1.49-era delta)
         /** VIDAA's assistant and its launcher (聚好看), on the two VIDAA builds reported (issues #7, #40). */
         private val VIDAA_PACKAGES = listOf("com.hisense.vidaaassistant", "com.jamdeo.tv.vod")
         /**

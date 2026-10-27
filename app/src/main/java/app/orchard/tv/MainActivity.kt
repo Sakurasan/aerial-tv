@@ -469,6 +469,12 @@ class MainActivity : ComponentActivity() {
         window.decorView.viewTreeObserver.addOnDrawListener {
             draws++
             if (draws <= 3) DiagLog.i("draw $draws: ${window.decorView.width}x${window.decorView.height}, hw=${window.decorView.isHardwareAccelerated}")
+            if (draws == 1) {
+                DiagLog.i("Aerial first frame")
+                // The window is on screen but blank until here: only now is the cover over the
+                // stock launcher allowed to come down (the window change and onResume run earlier).
+                HomeGuardService.onAerialFirstFrame()
+            }
         }
         // A heartbeat for the first two minutes: whether frames come at all, keys arrive and Home is in.
         for (s in 2..120 step 6) idleHandler.postDelayed({

@@ -14,6 +14,7 @@ import kotlin.concurrent.thread
  * permission on Android 10+, which tools/install.sh grants.
  */
 class BootReceiver : BroadcastReceiver() {
+
     override fun onReceive(context: Context, intent: Intent) {
         // Exported for the boot broadcasts only; anything else could use it to pull Aerial forward.
         val action = intent.action
