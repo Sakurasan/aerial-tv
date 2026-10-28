@@ -14,8 +14,8 @@ import kotlin.concurrent.thread
  * permission on Android 10+, which tools/install.sh grants.
  */
 class BootReceiver : BroadcastReceiver() {
-    /** Spans from the earliest boot broadcast to Aerial's first frame on a slow cold start. */
-    private val BOOT_COVER_MS = 60_000L
+    /** Spans from the earliest boot broadcast to Aerial's first frame; 30 s so a boot where Aerial never starts is not a long black stare. */
+    private val BOOT_COVER_MS = 30_000L
 
     override fun onReceive(context: Context, intent: Intent) {
         // Exported for the boot broadcasts only; anything else could use it to pull Aerial forward.
