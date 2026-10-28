@@ -45,8 +45,13 @@ class BootReceiver : BroadcastReceiver() {
         // accessibility service connects (+~21 s): those ~3 s of launcher were the one thing left
         // visible at boot. The overlay layer sits above its plain application window, so a cover
         // that is already up hides it; Aerial's first frame takes the cover down.
+        // The firmware's broadcast queue is late more often than early: BOOT_COMPLETED has landed
+        // after Aerial was already up. Covering then would blind the viewer, so only a broadcast
+        // that arrived while Aerial is not yet in front may arm the cover.
         android.os.Handler(android.os.Looper.getMainLooper()).post {
-            HomeGuardService.coverStockLauncher(context, BOOT_COVER_MS)
+            if (!HomeGuardService.isAerialResumed()) {
+                HomeGuardService.coverStockLauncher(context, BOOT_COVER_MS)
+            }
         }
         GuardSetup.ensureEnabled(context)
         if (action == Intent.ACTION_LOCKED_BOOT_COMPLETED) return
