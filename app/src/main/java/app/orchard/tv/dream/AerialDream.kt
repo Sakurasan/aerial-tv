@@ -12,6 +12,7 @@ import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import app.orchard.tv.MainActivity
+import app.orchard.tv.guard.HomeGuardService
 import app.orchard.tv.system.DiagLog
 import app.orchard.tv.system.MissingClipboard
 import app.orchard.tv.ui.theme.canvasDensity
@@ -127,6 +128,12 @@ class AerialDream : DreamService(), LifecycleOwner, SavedStateRegistryOwner {
 
     override fun onDetachedFromWindow() {
         if (running === this) running = null
+        registry.currentState = Lifecycle.State.DESTROYED
+        // The firmware's wake behavior is: stop the dream, start its launcher. The launcher draws
+        // before any broadcast or window event reaches the guard (~1.8 s of it on skyT963), and
+        // SCREEN_ON never fires here — the screen was on the whole time. The teardown of this
+        // window is the last hook in the same process that can still win that race.
+        HomeGuardService.coverStockLauncher(this)
         registry.currentState = Lifecycle.State.DESTROYED
         super.onDetachedFromWindow()
     }
