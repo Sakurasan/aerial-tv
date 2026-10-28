@@ -1598,6 +1598,9 @@ class HomeGuardService : AccessibilityService() {
         /** For AerialApp: re-cover a dark screen after the firmware killed the process mid-standby. */
         fun standbyCoverMs(): Long = STANDBY_COVER_MS
 
+        /** For the boot receiver: a broadcast delivered after Aerial is up must not cover it. */
+        fun isAerialResumed(): Boolean = aerialResumed
+
         fun onAerialFirstFrame() = removeCover("Aerial first frame")
 
         private fun resolvedHome(context: Context): String? =
