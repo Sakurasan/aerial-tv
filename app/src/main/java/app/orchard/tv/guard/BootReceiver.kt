@@ -14,6 +14,8 @@ import kotlin.concurrent.thread
  * permission on Android 10+, which tools/install.sh grants.
  */
 class BootReceiver : BroadcastReceiver() {
+    /** Spans from the earliest boot broadcast to Aerial's first frame on a slow cold start. */
+    private val BOOT_COVER_MS = 60_000L
 
     override fun onReceive(context: Context, intent: Intent) {
         // Exported for the boot broadcasts only; anything else could use it to pull Aerial forward.
@@ -38,6 +40,14 @@ class BootReceiver : BroadcastReceiver() {
     }
 
     private fun onBoot(context: Context, action: String) {
+        // Cover the stock launcher NOW, from whichever boot broadcast arrives first. On skyT963
+        // the firmware starts its launcher by explicit component at boot+~20 s, before the guard's
+        // accessibility service connects (+~21 s): those ~3 s of launcher were the one thing left
+        // visible at boot. The overlay layer sits above its plain application window, so a cover
+        // that is already up hides it; Aerial's first frame takes the cover down.
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            HomeGuardService.coverStockLauncher(context, BOOT_COVER_MS)
+        }
         GuardSetup.ensureEnabled(context)
         if (action == Intent.ACTION_LOCKED_BOOT_COMPLETED) return
         GuardSetup.rescanIfMissing(context)
