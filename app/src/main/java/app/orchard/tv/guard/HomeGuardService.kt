@@ -1152,8 +1152,10 @@ class HomeGuardService : AccessibilityService() {
         broughtBackAt = SystemClock.uptimeMillis()
         // The launcher is a plain application window (skyT963: mBaseLayer=21000): an app overlay
         // covers it. A cover added when the launcher is already on screen only hides what comes
-        // after, so the lasting one goes up at SCREEN_OFF; this one re-arms it on every bounce.
-        coverStockLauncher(this)
+        // after, so the lasting one goes up at SCREEN_OFF; this one re-arms it on every bounce —
+        // but only when something other than Aerial is in front: a duplicate bring-back over a
+        // visible Aerial must not blind the viewer with the cover.
+        if (!aerialResumed) coverStockLauncher(this)
         runCatching {
             startActivity(MainActivity.bringBackIntent(this).putExtra(MainActivity.EXTRA_WOKE, woke))
         }.onFailure { Log.w(TAG, "could not bring Aerial Home to the front", it) }    }
