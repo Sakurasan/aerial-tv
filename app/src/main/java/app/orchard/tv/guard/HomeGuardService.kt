@@ -1507,7 +1507,6 @@ class HomeGuardService : AccessibilityService() {
         @Volatile
         private var deafAfterHome = false
 
-<<<<<<< HEAD
         /**
          * Apps where Home brought no window change of the stock launcher, kept across processes.
          * In the Bilibili client blbl.cat3399 on Xiaomi MiTV-MFTR0 (Android 14, OS3.0.106), the
@@ -1534,7 +1533,7 @@ class HomeGuardService : AccessibilityService() {
             context.getSharedPreferences(QUIET_HOME_PREFS, Context.MODE_PRIVATE).edit().putStringSet("apps", next).apply()
         }
 
-=======
+
         private var cover: View? = null
         private val coverHandler = Handler(Looper.getMainLooper())
         private val coverTimeout = Runnable { removeCover("timeout") }
@@ -1609,7 +1608,6 @@ class HomeGuardService : AccessibilityService() {
                 PackageManager.MATCH_DEFAULT_ONLY,
             )?.activityInfo?.packageName
 
->>>>>>> e58cb77 (custom on v1.62: Skyworth sources persistence, SCREEN_OFF cover, wake fast-start, tile dedup — one squashed apply of the 1.49-era delta)
         /** VIDAA's assistant and its launcher (聚好看), on the two VIDAA builds reported (issues #7, #40). */
         private val VIDAA_PACKAGES = listOf("com.hisense.vidaaassistant", "com.jamdeo.tv.vod")
         /**
